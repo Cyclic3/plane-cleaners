@@ -6,12 +6,9 @@
 #include <condition_variable>
 #include <queue>
 #include <random>
+#include <thread>
 #include <type_traits>
 #include <latch>
-
-#include <oneapi/tbb/concurrent_queue.h>
-
-static_assert(std::ranges::contiguous_range<coord_t<2>>);
 
 /// Describes the points in some subset of the plane (usually a square)
 class chunk {

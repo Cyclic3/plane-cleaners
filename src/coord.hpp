@@ -3,13 +3,9 @@
 #include <array>
 #include <algorithm>
 #include <cmath>
-#include <cstddef>
 #include <functional>
-#include <experimental/iterator>
 #include <numeric>
 #include <ostream>
-
-
 
 template<typename F, F ptr>
 struct c_deleter {
@@ -20,6 +16,7 @@ struct c_deleter {
 /// A simple class that handles operations on coordinates
 template<size_t dims, typename CoordT = double>
 class coord_t {
+  static_assert(dims >= 1);
 private:
   std::array<CoordT, dims> _arr;
 
@@ -73,8 +70,10 @@ public:
 
 template<size_t dims, typename CoordT = double>
 inline std::ostream& operator<<(std::ostream& os, coord_t<dims, CoordT> const& coord) {
-  os << '(';
-  std::copy(coord.begin(), coord.end(), std::experimental::make_ostream_joiner(os, ", "));
+  auto iter = coord.begin();
+  os << '(' << *iter;
+  for (; iter != coord.end(); ++iter)
+    os << ", " << *iter;
   os << ')';
   return os;
 }
@@ -85,3 +84,5 @@ namespace std {
     return std::sqrt(std::accumulate(x.begin(), x.end(), CoordT{}, [](CoordT acc, CoordT next) { return acc + (next*next); }));
   }
 }
+
+static_assert(std::ranges::contiguous_range<coord_t<2>>);
