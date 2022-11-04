@@ -27,8 +27,12 @@ private:
   std::unique_ptr<SDL_Renderer, C_DELETER(SDL_DestroyRenderer)> renderer;
   std::unique_ptr<SDL_Window, C_DELETER(SDL_DestroyWindow)> window;
   thread_status worker_status;
-  std::jthread worker_thread;
   int cleaner_size = 1;
+  std::mutex renderer_mutex;
+  std::atomic<uint64_t> iter_count = 0;
+
+  std::jthread worker_thread;
+
 
   std::mutex param_mutex;
   struct {
@@ -60,6 +64,7 @@ private:
     bool mouse_down = false;
 
     while (!tok.stop_requested()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
       SDL_PollEvent(&event);
       switch (event.type) {
         // Scroll zoom
@@ -133,6 +138,21 @@ private:
               _params.centre += coord_t<2>{0, tweaks.rel_step * _params.scale};
             } break;
 
+            case 'p':
+            {
+              std::unique_lock lock{param_mutex};
+              std::unique_lock renderer_lock{renderer_mutex};
+              std::vector<uint32_t> out(_params.dims_int[0] * _params.dims_int[1]);
+              std::unique_ptr<SDL_Surface, C_DELETER(SDL_FreeSurface)> surface(SDL_CreateRGBSurfaceWithFormat(0, _params.dims_int[0], _params.dims_int[1], 24, SDL_PIXELFORMAT_RGB24));
+              if (!surface)
+                throw sdl_exception{};
+              if (SDL_RenderReadPixels(renderer.get(), nullptr, SDL_PIXELFORMAT_RGB24, surface->pixels, surface->pitch))
+                throw sdl_exception{};
+              std::string fname = "plane-cleaners_" + std::to_string(iter_count) + ".bmp";
+              if (SDL_SaveBMP(surface.get(), fname.c_str()))
+                throw sdl_exception{};
+            } break;
+
             case '+':
             case '=':
             {
@@ -193,6 +213,9 @@ private:
 
 
 public:
+  void set_iter_count(uint64_t iters) {
+    iter_count = iters;
+  }
   // A safe way of reading the parameters
   decltype(_params) get_params() {
     std::unique_lock lock{param_mutex};
@@ -210,6 +233,8 @@ public:
     // Load the pixels
     auto pix = get_pixels(s, start, finish, params.scale, params.dims_int);
 
+    std::unique_lock renderer_lock{renderer_mutex};
+
     // Draw the pixels
     std::unique_ptr<SDL_Surface, C_DELETER(SDL_FreeSurface)> surface{SDL_CreateRGBSurfaceFrom(pix.data(), params.dims_int[0], params.dims_int[1], 32, params.dims_int[0] * sizeof(uint32_t), 0x000000ff, 0x0000ff00, 0x00ff0000, 0x00000000)};
     if (!surface)
@@ -217,14 +242,17 @@ public:
     std::unique_ptr<SDL_Texture, C_DELETER(SDL_DestroyTexture)> texture{SDL_CreateTextureFromSurface(renderer.get(), surface.get())};
     if (!texture)
       throw sdl_exception{};
-    SDL_RenderCopy(renderer.get(), texture.get(), nullptr, nullptr);
+    if (SDL_RenderCopy(renderer.get(), texture.get(), nullptr, nullptr))
+      throw sdl_exception{};
 
     // Draw our cleaners on top, as red boxes rather than pixels so that they can be seen
-    SDL_SetRenderDrawColor(renderer.get(), 255, 0, 0, SDL_ALPHA_OPAQUE);
+    if (SDL_SetRenderDrawColor(renderer.get(), 255, 0, 0, SDL_ALPHA_OPAQUE))
+      throw sdl_exception{};
     for (auto& cleaner : cleaners) {
       auto pix_pos = (cleaner - start) / params.scale;
       SDL_Rect rect{static_cast<int>(pix_pos[0] - cleaner_size), static_cast<int>(pix_pos[1] - cleaner_size), 1 + cleaner_size * 2, 1 + cleaner_size * 2};
-      SDL_RenderDrawRect(renderer.get(), &rect);
+      if (SDL_RenderDrawRect(renderer.get(), &rect))
+        throw sdl_exception{};
     }
 
     // Finally, actually draw the result
@@ -243,7 +271,8 @@ public:
     {
       SDL_Renderer* renderer_ptr;
       SDL_Window* window_ptr;
-      SDL_CreateWindowAndRenderer(dims_int_[0], dims_int_[1], SDL_WINDOW_RESIZABLE, &window_ptr, &renderer_ptr);
+      if (SDL_CreateWindowAndRenderer(dims_int_[0], dims_int_[1], SDL_WINDOW_RESIZABLE, &window_ptr, &renderer_ptr))
+        throw sdl_exception{};
       if (!renderer_ptr)
         throw sdl_exception{};
       renderer.reset(renderer_ptr);
@@ -301,6 +330,7 @@ int main(int argc, char** argv) {
     auto step_time = std::chrono::duration_cast<std::chrono::duration<double>>(step_end - step_start).count();
     std::cout << count*n_cleaners << " iters (" << params.iter_step << " per worker per step) in " << total_time << "s (step has " << (n_cleaners * params.iter_step / (step_time * 1000)) << "kiter/s)" << std::endl;
 
+    g.set_iter_count(count*n_cleaners);
     g.draw_space(s, cleaners);
   }
 

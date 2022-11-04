@@ -18,7 +18,7 @@ private:
     chunk_map::iterator cached_up;
     /// either `active_chunks.end()` or an iterator for the next chunk (- {1, 1})
     ///
-    /// This allows us to easily iterate a L1 search for a point, as the bottom right point of an L1 circle with 1 greater radius is 1 down and 1 to the right
+    /// This allows us to easily iterate a L_\infty search for a point, as the bottom right point of an L_\infty circle with 1 greater radius is 1 down and 1 to the right
     chunk_map::iterator cached_next;
   };
 
@@ -92,10 +92,13 @@ public:
   find_nearest_ret_t find_nearest(coord_t<2> target, chunk_map::iterator start_point) {
     // Start with some hypothetical point infinitely far away
     find_nearest_ret_t best{{}, std::numeric_limits<double>::infinity()};
-    double l1_radius_upper_bound = std::numeric_limits<double>::infinity(); //std::numeric_limits<int64_t>::max();
+    double l_inf_radius_upper_bound = std::numeric_limits<double>::infinity();
+    auto target_offset = target - get_chunk_centre(start_point->first);
+    double l_inf_centre_dist = std::max(std::abs(target_offset[0]), std::abs(target_offset[1]));
 
+    int64_t l_inf_radius = 1;
     // DRY function for checking the points in a chunk
-    auto handle_one = [&best, &target, &l1_radius_upper_bound, &start_point](chunk_map::iterator const& chunk_iter) {
+    auto handle_one = [&best, &target, &l_inf_radius_upper_bound, &l_inf_centre_dist](chunk_map::iterator const& chunk_iter) {
       if (chunk_iter->second.data.empty())
         return;
 
@@ -104,8 +107,12 @@ public:
       // Check all the points in the chunk
       if (auto closest_in_chunk = chunk_iter->second.data.find_nearest(target); closest_in_chunk.second < best.distance) {
         best = {{chunk_iter, closest_in_chunk.first}, closest_in_chunk.second};
-        // |L_1 / L_2| <= sqrt(2), and add 1 to deal with chunk granularity
-        l1_radius_upper_bound = (best.distance / chunk_size) * M_SQRT2 + 1;
+        // Checking to see if we're on the last iteration slows us down for some reason
+        //
+        // So too does breaking this out into the main loop, and explicitly checking if we need another loop
+
+        // This bound is justified in the README
+        l_inf_radius_upper_bound = (l_inf_centre_dist + best.distance) / chunk_size + 0.5;
       }
     };
 
@@ -114,25 +121,25 @@ public:
 
     // Iterate through remaining points
     chunk_map::iterator last_start = start_point;
-    for (int64_t l1_radius = 1; l1_radius <= l1_radius_upper_bound; ++l1_radius) {
+    for (; l_inf_radius <= l_inf_radius_upper_bound; ++l_inf_radius) {
       // Step out one
       last_start = load_next(last_start);
 
       chunk_map::iterator pos = last_start;
       // Load bottom side
-      for (int64_t x = -l1_radius; x < l1_radius; ++x, pos = load_right(pos))
+      for (int64_t x = -l_inf_radius; x < l_inf_radius; ++x, pos = load_right(pos))
         handle_one(pos);
       // Handle row end
       handle_one(pos);
       // Load right side
-      for (int64_t y = -l1_radius; y < l1_radius; ++y)
+      for (int64_t y = -l_inf_radius; y < l_inf_radius; ++y)
         handle_one(pos = load_up(pos));
       // Load left side
       pos = last_start;
-      for (int64_t y = -l1_radius; y < l1_radius; ++y)
+      for (int64_t y = -l_inf_radius; y < l_inf_radius; ++y)
         handle_one(pos = load_up(pos));
       // Load remaining top side
-      for (int64_t x = -l1_radius; x < l1_radius; ++x)
+      for (int64_t x = -l_inf_radius; x < l_inf_radius; ++x)
         handle_one(pos = load_right(pos));
     }
 
