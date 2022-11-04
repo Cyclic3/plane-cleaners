@@ -3,7 +3,6 @@
 #include <chrono>
 #include <iostream>
 #include <map>
-#include <mutex>
 #include <shared_mutex>
 
 class space {
@@ -82,7 +81,7 @@ public:
     double distance;
 
     using start_t = chunk_map::iterator;
-    constexpr coord_t<2> const& get_point() const noexcept { return chunk::get_point(iter.second); }
+    coord_t<2> const& get_point() const noexcept { return chunk::get_point(iter.second); }
     constexpr start_t const& get_start() const noexcept { return iter.first; }
   };
   find_nearest_ret_t find_nearest(coord_t<2> target) {

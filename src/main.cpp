@@ -1,6 +1,8 @@
 #include "space.hpp"
 
 #include <SDL2/SDL.h>
+// why does sdl do this on Windows?
+#undef main
 
 #include <iostream>
 #include <mutex>
@@ -41,7 +43,7 @@ private:
     /// Current middle of the screen
     coord_t<2> centre = {0,0};
     /// Current screen dimensions
-    coord_t<2, int64_t> dims_int;
+    coord_t<2, int> dims_int;
     /// The number of iterations we do in a single step
     uint64_t iter_step = 1;
   } _params;
@@ -57,15 +59,30 @@ private:
 
 private:
   /// Handles user input
-  void worker_body(std::stop_token tok) {
+  void worker_body(std::stop_token tok, std::latch& ready_latch) {
+    // Windows needs this to be in the same thread as the the user input logic
+    SDL_Init(SDL_INIT_VIDEO);
+    {
+      SDL_Renderer* renderer_ptr;
+      SDL_Window* window_ptr;
+      // We don't need to lock yet, as no other threads are running
+      if (SDL_CreateWindowAndRenderer(_params.dims_int[0], _params.dims_int[1], SDL_WINDOW_RESIZABLE, &window_ptr, &renderer_ptr))
+        throw sdl_exception{};
+      if (!renderer_ptr)
+        throw sdl_exception{};
+      renderer.reset(renderer_ptr);
+      window.reset(window_ptr);
+    }
+
+    ready_latch.count_down();
+
     std::unique_lock lock{worker_status};
     SDL_Event event;
 
     bool mouse_down = false;
 
     while (!tok.stop_requested()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds{1});
-      SDL_PollEvent(&event);
+      SDL_WaitEvent(&event);
       switch (event.type) {
         // Scroll zoom
         case SDL_MOUSEWHEEL: {
@@ -197,7 +214,7 @@ private:
   /// Walks through the given rectangle, generating black/white pixels for each point
   ///
   // TODO: fix this being pretty slow
-  std::vector<uint32_t> get_pixels(space& s, coord_t<2> start, coord_t<2> finish, double scale, coord_t<2, int64_t> const& dims_int) {
+  std::vector<uint32_t> get_pixels(space& s, coord_t<2> start, coord_t<2> finish, double scale, coord_t<2, int> const& dims_int) {
     std::vector<uint32_t> out(dims_int[0] * dims_int[1], 0xffffff);
     s.examine_rectangle(start, finish, [&start, &out, &scale, &dims_int](space::examine_arg_t const& c) {
       for (auto& point : c->second.data) {
@@ -265,20 +282,11 @@ public:
   }
 
 public:
-  graphics(coord_t<2, int64_t> dims_int_) {
+  graphics(coord_t<2, int> dims_int_) {
     _params.dims_int = dims_int_;
-    SDL_Init(SDL_INIT_VIDEO);
-    {
-      SDL_Renderer* renderer_ptr;
-      SDL_Window* window_ptr;
-      if (SDL_CreateWindowAndRenderer(dims_int_[0], dims_int_[1], SDL_WINDOW_RESIZABLE, &window_ptr, &renderer_ptr))
-        throw sdl_exception{};
-      if (!renderer_ptr)
-        throw sdl_exception{};
-      renderer.reset(renderer_ptr);
-      window.reset(window_ptr);
-    }
-    worker_thread = std::jthread{&graphics::worker_body, this};
+    std::latch ready_latch(1);
+    worker_thread = std::jthread{[this, &ready_latch](std::stop_token tok) { worker_body(tok, ready_latch); }};
+    ready_latch.wait();
   }
 };
 

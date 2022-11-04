@@ -180,7 +180,7 @@ public:
 
     // Create our worker threads
     for (int i = 0; i < n_workers; ++i)
-      workers.emplace_back(&chunk_generator::worker, this, rng_state{fallback_generator});
+      workers.emplace_back([this](std::stop_token tok) { worker(tok, fallback_generator); });
   }
 
   ~chunk_generator() {

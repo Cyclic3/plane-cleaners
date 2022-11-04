@@ -52,7 +52,7 @@ public:
     return ret;
   }
 
-  constexpr std::strong_ordering operator<=>(coord_t const&) const noexcept = default;
+  constexpr std::partial_ordering operator<=>(coord_t const& other) const noexcept = default;
 
   constexpr auto begin() noexcept { return _arr.begin(); }
   constexpr auto begin() const noexcept { return _arr.begin(); }
