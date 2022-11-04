@@ -68,4 +68,4 @@ This algorithm allows us to find the closest point without having to generate th
 ## Credit
 This is a part of my Unviersity of Liverpool MATH490 project, supervised by Prof. Takis Konstantopoulos. 
 All the code is mine, with the exception of a few lines of code taken from the SDL2 example sources to get the graphics working,
-but it would not have been possible without the detailed mathematical explainations provided by my supervisor.
+and the PCG code in the [pcg-cpp](pcg-cpp/) git submodule, but it would not have been possible without the detailed mathematical explainations provided by my supervisor.
