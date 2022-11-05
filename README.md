@@ -3,10 +3,11 @@
 ## What is it?
 This program simulates greedy cleaners (also known as a greedy walk) on a plane, which can be described as so:
 
-1. Scatter points of 'dust' on $\mathbb{R}^2$ according to a Poisson process (the parametter $\lambda > 0$ is unimportant, so `plane-cleaners` picks 1 for efficiency).
+1. Scatter points of 'dust' on $\mathbb{R}^2$ according to a Poisson process (the parameter $\lambda > 0$ is unimportant, 
+   so `plane-cleaners` picks 1 for efficiency).
 2. Create $n$ 'cleaners' at the origin.
 3. We loop the following forever, iterating over each cleaner in turn:
-    1. Find the nearest 'cleaners' to the cleaner.
+    1. Find the nearest 'dust particle' to the cleaner.
     2. Delete it.
 
 `plane-cleaners` allows you to watch the behaviour of these cleaners in their space in real time.
@@ -26,7 +27,7 @@ A small region of 4 cleaners, 220233828 iters:
 ## Caveats
 `plane-cleaners` will use all the resources it can to run the simulation. This means it will gobble more and more RAM,
 and hammer your CPUs as much as it needs to run as fast as possible, which could result in system crashes.
-A system to swap out unused chunks to disk is being worked on, which should help with the memory exhausion issues.
+A system to swap out unused chunks to disk is being worked on, which should help with the memory exhaustion issues.
 
 ## How does it work?
 Simulating the whole of $\mathbb{R}^2$ is not really a feasible solution. Instead, we use the following property of the $n$-dimensional Poisson process:
@@ -52,7 +53,8 @@ with some current best option $c'$ and iteration upper bound $b = \infty$:
 3. Set $c'$ to this closest point (if it is closer than the old value of $c'$).
 4. Set $b = \frac{d_\infty(c, C) + d_2(c, c')}{S} + \frac{1}{2}$.
 
-The bound can be justified like so, with $C'$ being the centre of the chunk of some $c'$, and the same with $C_f$ and $c_f$ representing the closest piece of dust:
+The bound can be justified like so, with $C'$ being the centre of the chunk of some $c'$, 
+and the same with $C_f$ and $c_f$ representing the closest piece of dust:
 
 > $d_\infty(C, C_f)$
 
@@ -70,6 +72,7 @@ Dividing through by $S$ gets you the required bound.
 This algorithm allows us to find the closest point without having to generate the entire plane, and thus making this problem computable.
 
 ## Credit
-This is a part of my Unviersity of Liverpool MATH490 project, supervised by Prof. Takis Konstantopoulos. 
-All the code is mine, with the exception of a few lines of code taken from the SDL2 example sources to get the graphics working,
-but it would not have been possible without the detailed mathematical explainations provided by my supervisor.
+This is a part of my University of Liverpool MATH490 project, supervised by Prof. Takis Konstantopoulos. 
+All the code is mine, with the exception of a few lines of code taken from the SDL2 example sources to get the graphics working, 
+and the PCG code in the [pcg-cpp](pcg-cpp/) git submodule, 
+but it would not have been possible without the detailed mathematical explanations provided by my supervisor.
