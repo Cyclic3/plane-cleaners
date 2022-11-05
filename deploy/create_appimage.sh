@@ -41,6 +41,7 @@ cd usr/bin
 
 cat << EOF > start.sh
 #!/bin/sh
+cd "\$OWD"
 export LIB_PATH="\$(dirname \$(readlink -f "\${0}"))"
 "\$LIB_PATH/ld.so" --library-path "\$LIB_PATH" "\$LIB_PATH/$(basename $1)" "\$@"
 EOF
