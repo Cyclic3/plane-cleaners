@@ -72,7 +72,7 @@ template<size_t dims, typename CoordT = double>
 inline std::ostream& operator<<(std::ostream& os, coord_t<dims, CoordT> const& coord) {
   auto iter = coord.begin();
   os << '(' << *iter;
-  for (; iter != coord.end(); ++iter)
+  for (++iter; iter != coord.end(); ++iter)
     os << ", " << *iter;
   os << ')';
   return os;
