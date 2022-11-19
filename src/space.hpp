@@ -150,7 +150,7 @@ public:
 
   /// Iterates through the given rectangle, but single threaded
   ///
-  /// XXX: assumes bottom_right is neither above nor to the right of top_right
+  /// XXX: assumes `bottom_left` is neither above nor to the right of `top_right`
   using examine_arg_t = chunk_map::iterator;
   template<typename F>
   void examine_rectangle_st(coord_t<2> bottom_left, coord_t<2> top_right, F func) {
@@ -170,7 +170,7 @@ public:
   }
   /// Iterates through the given rectangle, but multithreaded
   ///
-  /// XXX: assumes bottom_right is neither above nor to the right of top_right
+  /// XXX: assumes `bottom_left` is neither above nor to the right of `top_right`
   template<typename F>
   void examine_rectangle(coord_t<2> bottom_left, coord_t<2> top_right, F func) {
     chunk_id_t start_chunk_id = calc_chunk_id(bottom_left);
@@ -191,7 +191,7 @@ public:
 
     for (int thread_no = 0; thread_no < n_threads; ++thread_no) {
       threads.emplace_back([&map_mutex, &next_column, &finish_chunk_id, &scheduler_mutex, &next_x_chunk, &start_chunk_id, &func, this] {
-        // The condition is too complex to reasonably fit into the while condition
+        // The stop condition is too complex to reasonably fit into the `while` condition
         while (true) {
           // These will be initialised by the locked region
           chunk_map::iterator iter;
