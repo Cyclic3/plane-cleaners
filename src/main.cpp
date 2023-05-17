@@ -224,15 +224,14 @@ private:
     std::vector<uint8_t> pixel_dusty(dims_int[0] * dims_int[1], 0);
     // If we are zoomed at far enough, all unloaded pixels are probably dusty, so no need to make everything look bad
     if (do_opt) {
-      std::fill(pixel_loaded.begin(), pixel_loaded.end(), 1);
-      std::fill(pixel_dusty.begin(), pixel_dusty.end(), 1);
+//      std::fill(pixel_loaded.begin(), pixel_loaded.end(), 1);
+      std::fill(pixel_dusty.begin(), pixel_dusty.end(), 0);
     }
 
-
-    // It turns out that it's not worth the cost of synchonisation for this
-    s.examine_rectangle_st(start, finish, [&start, &pixel_loaded, &pixel_dusty, &scale, &dims_int, chunk_pix_size, do_opt](space::examine_arg_t const& c) {
-      // Optimise for zoomed out
-      if (do_opt) {
+    if (do_opt) {
+      std::cout << "OPT" << std::endl;
+      // It turns out that it's not worth the cost of synchonisation for this
+      s.examine_rectangle_st(start, finish, [&start, &pixel_loaded, &pixel_dusty, &scale, &dims_int](space::examine_arg_t const& c) {
         auto pos = (c->second.centre - start) / scale;
         coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
 
@@ -242,11 +241,15 @@ private:
 
         size_t pixel_idx = pixel_coords[0] + pixel_coords[1] * dims_int[0];
         // At this scale, all unloaded chunks likely have dust in them
-        if (c->second.data && c->second.data->empty())
-          pixel_dusty[pixel_idx] = 0;
-      }
-      else {
-        // Skip unloaded chunks
+        if (!c->second.data)
+          return;
+        pixel_loaded[pixel_idx] = 1;
+        if (!c->second.data->empty())
+          pixel_dusty[pixel_idx] = 1;
+      }, false);
+    }
+    else {
+      s.examine_rectangle(start, finish, [&start, &pixel_loaded, &pixel_dusty, &scale, &dims_int, chunk_pix_size](space::examine_arg_t const& c) {
         if (!c->second.data)
           return;
         // Mark all covered chunks as loaded, making sure not to go over the edge
@@ -273,8 +276,8 @@ private:
             return;
           pixel_dusty[pixel_coords[0] + pixel_coords[1] * dims_int[0]] = 1;
         }
-      }
-    });
+      }, scale < 2);
+    }
 
 
     std::vector<uint32_t> out(dims_int[0] * dims_int[1], 0x002000);

@@ -9,7 +9,7 @@
 /// The side length of each chunk
 //
 // 6 seems to be near some local maximum on my machine, but this has not been rigorously selected
-static constexpr double chunk_size = 6;
+static constexpr double chunk_size = 10; //6
 class space {
 private:
   using chunk_id_t = coord_t<2, int64_t>;
@@ -53,7 +53,7 @@ public:
     return {chunk[0] * chunk_size, chunk[1] * chunk_size};
   }
 private:
-  chunk_map::iterator load_chunk(chunk_id_t chunk_id) {
+  chunk_map::iterator load_chunk(chunk_id_t chunk_id, bool force_load = false) {
     // Lower bound makes insert faster, roughly doubling the speed of this function
     auto iter = active_chunks.lower_bound(chunk_id);
     // If our chunk already exists, return it
@@ -65,22 +65,33 @@ private:
     auto up = active_chunks.find(chunk_id + chunk_id_t{0, 1});
     auto next = active_chunks.find(chunk_id - chunk_id_t{1, 1});
 
-    return active_chunks.emplace_hint(iter, chunk_id, chunk_info{std::nullopt, right, up, next, get_chunk_centre(chunk_id)});
+    auto centre = get_chunk_centre(chunk_id);
+
+    return active_chunks.emplace_hint(iter, chunk_id, chunk_info{force_load ? std::optional<chunk>{chunk_gen.create_chunk(centre)} : std::nullopt, right, up, next, centre});
   }
-  chunk_map::iterator load_right(chunk_map::iterator const& chunk) {
-    if (chunk->second.cached_right != active_chunks.end())
+  chunk_map::iterator load_right(chunk_map::iterator const& chunk, bool force_load = false) {
+    if (chunk->second.cached_right != active_chunks.end()) {
+      if (force_load)
+        chunk->second.cached_right->second.get_data(chunk_gen);
       return chunk->second.cached_right;
-    return chunk->second.cached_right = load_chunk(chunk->first + chunk_id_t{1, 0});
+    }
+    return chunk->second.cached_right = load_chunk(chunk->first + chunk_id_t{1, 0}, force_load);
   }
-  chunk_map::iterator load_up(chunk_map::iterator const& chunk) {
-    if (chunk->second.cached_up != active_chunks.end())
+  chunk_map::iterator load_up(chunk_map::iterator const& chunk, bool force_load = false) {
+    if (chunk->second.cached_up != active_chunks.end()) {
+      if (force_load)
+        chunk->second.cached_up->second.get_data(chunk_gen);
       return chunk->second.cached_up;
-    return chunk->second.cached_up = load_chunk(chunk->first + chunk_id_t{0, 1});
+    }
+    return chunk->second.cached_up = load_chunk(chunk->first + chunk_id_t{0, 1}, force_load);
   }
-  chunk_map::iterator load_next(chunk_map::iterator const& chunk) {
-    if (chunk->second.cached_next != active_chunks.end())
+  chunk_map::iterator load_next(chunk_map::iterator const& chunk, bool force_load = false) {
+    if (chunk->second.cached_next != active_chunks.end()){
+      if (force_load)
+        chunk->second.cached_next->second.get_data(chunk_gen);
       return chunk->second.cached_next;
-    return chunk->second.cached_next = load_chunk(chunk->first - chunk_id_t{1, 1});
+    }
+    return chunk->second.cached_next = load_chunk(chunk->first - chunk_id_t{1, 1}, force_load);
   }
 
 public:
@@ -165,26 +176,26 @@ public:
   /// XXX: assumes `bottom_left` is neither above nor to the right of `top_right`
   using examine_arg_t = chunk_map::iterator;
   template<typename F>
-  void examine_rectangle_st(coord_t<2> bottom_left, coord_t<2> top_right, F func) {
+  void examine_rectangle_st(coord_t<2> bottom_left, coord_t<2> top_right, F func, bool force_load = false) {
     chunk_id_t start_chunk_id = calc_chunk_id(bottom_left);
     chunk_id_t finish_chunk_id = calc_chunk_id(top_right);
 
-    auto x_chunk = load_chunk(start_chunk_id);
+    auto x_chunk = load_chunk(start_chunk_id, force_load);
     for (int64_t x = start_chunk_id[0]; x < finish_chunk_id[0]; ++x, x_chunk = load_right(x_chunk)) {
       auto y_chunk = x_chunk;
       func(y_chunk);
       for (int64_t y = start_chunk_id[1]; y < finish_chunk_id[1]; ++y)
-        func(y_chunk = load_up(y_chunk));
+        func(y_chunk = load_up(y_chunk, force_load));
     }
     func(x_chunk);
     for (int64_t y = start_chunk_id[1]; y < finish_chunk_id[1]; ++y)
-      func(x_chunk = load_up(x_chunk));
+      func(x_chunk = load_up(x_chunk, force_load));
   }
   /// Iterates through the given rectangle, but multithreaded
   ///
   /// XXX: assumes `bottom_left` is neither above nor to the right of `top_right`
   template<typename F>
-  void examine_rectangle(coord_t<2> bottom_left, coord_t<2> top_right, F func) {
+  void examine_rectangle(coord_t<2> bottom_left, coord_t<2> top_right, F func, bool force_load = false) {
     chunk_id_t start_chunk_id = calc_chunk_id(bottom_left);
     chunk_id_t finish_chunk_id = calc_chunk_id(top_right);
 
@@ -195,14 +206,14 @@ public:
 
     // This mutex protects the simple scheduling logic, so that the threads can just take the next one they need
     std::mutex scheduler_mutex;
-    auto next_x_chunk = load_chunk(start_chunk_id);
+    auto next_x_chunk = load_chunk(start_chunk_id, force_load);
     int64_t next_column = start_chunk_id[0];
 
     int n_threads = std::jthread::hardware_concurrency();
     std::vector<std::jthread> threads;
 
     for (int thread_no = 0; thread_no < n_threads; ++thread_no) {
-      threads.emplace_back([&map_mutex, &next_column, &finish_chunk_id, &scheduler_mutex, &next_x_chunk, &start_chunk_id, &func, this] {
+      threads.emplace_back([&map_mutex, &next_column, &finish_chunk_id, &scheduler_mutex, &next_x_chunk, &start_chunk_id, &func, this, &force_load] {
         // The stop condition is too complex to reasonably fit into the `while` condition
         while (true) {
           // These will be initialised by the locked region
@@ -224,7 +235,7 @@ public:
               // If we haven't cached the right chunk, we need to write-lock the map and load it
               if (next_x_chunk->second.cached_right == active_chunks.end()) {
                 std::unique_lock lock{map_mutex};
-                next_x_chunk = load_right(next_x_chunk);
+                next_x_chunk = load_right(next_x_chunk, force_load);
               }
               // Otherwise, we can just set it without worrying about map state
               else
@@ -243,7 +254,7 @@ public:
               {
                 // Write lock the map
                 std::unique_lock lock{map_mutex};
-                iter = load_up(iter);
+                iter = load_up(iter, force_load);
               }
               // Reaquire our read lock
               map_lock.lock();
