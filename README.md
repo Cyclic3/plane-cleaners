@@ -5,10 +5,8 @@ This program simulates greedy cleaners (also known as a greedy walk) on a plane,
 
 1. Scatter points of 'dust' on $\mathbb{R}^2$ according to a Poisson process (the parameter $\lambda > 0$ is unimportant, 
    so `plane-cleaners` picks 1 for efficiency).
-2. Create $n$ 'cleaners' at the origin.
-3. We loop the following forever, iterating over each cleaner in turn:
-    1. Find the nearest 'dust particle' to the cleaner.
-    2. Delete it.
+2. Create $n$ 'cleaners' at the origin, with corresponding exponentially distributed timers with parameter 1.
+3. Whenever a timer goes off, the corresponding cleaner jumps to the nearest dust particle, and ereases it. The timer for this cleaner is then reset.
 
 `plane-cleaners` allows you to watch the behaviour of these cleaners in their space in real time.
 

@@ -215,16 +215,76 @@ private:
   ///
   // TODO: fix this being pretty slow
   std::vector<uint32_t> get_pixels(space& s, coord_t<2> start, coord_t<2> finish, double scale, coord_t<2, int> const& dims_int) {
-    std::vector<uint32_t> out(dims_int[0] * dims_int[1], 0xffffff);
-    s.examine_rectangle(start, finish, [&start, &out, &scale, &dims_int](space::examine_arg_t const& c) {
-      for (auto& point : c->second.data) {
-        auto pos = (point - start) / scale;
-        coord_t<2, int64_t> pos_int{pos[0], pos[1]};
-        if (pos_int[0] < 0 || pos_int[1] < 0 || pos_int[0] >= dims_int[0] || pos_int[1] >= dims_int[1])
+    auto chunk_pix_size = std::max<uint64_t>(chunk_size / scale, 1);
+    // Check if the chunks are small enough that we don't have to worry about quantisation
+    bool do_opt = chunk_size / scale < 0.5;
+
+    // can't use std::vector<bool> because of the bit funny
+    std::vector<uint8_t> pixel_loaded(dims_int[0] * dims_int[1], 0);
+    std::vector<uint8_t> pixel_dusty(dims_int[0] * dims_int[1], 0);
+    // If we are zoomed at far enough, all unloaded pixels are probably dusty, so no need to make everything look bad
+    if (do_opt) {
+      std::fill(pixel_loaded.begin(), pixel_loaded.end(), 1);
+      std::fill(pixel_dusty.begin(), pixel_dusty.end(), 1);
+    }
+
+
+    // It turns out that it's not worth the cost of synchonisation for this
+    s.examine_rectangle_st(start, finish, [&start, &pixel_loaded, &pixel_dusty, &scale, &dims_int, chunk_pix_size, do_opt](space::examine_arg_t const& c) {
+      // Optimise for zoomed out
+      if (do_opt) {
+        auto pos = (c->second.centre - start) / scale;
+        coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
+
+        // Skip OOB chunks
+        if (pixel_coords[0] < 0 || pixel_coords[1] < 0 || pixel_coords[0] >= dims_int[0] || pixel_coords[1] >= dims_int[1])
           return;
-        out[pos_int[0] + pos_int[1] * dims_int[0]] = 0;
+
+        size_t pixel_idx = pixel_coords[0] + pixel_coords[1] * dims_int[0];
+        // At this scale, all unloaded chunks likely have dust in them
+        if (c->second.data && c->second.data->empty())
+          pixel_dusty[pixel_idx] = 0;
+      }
+      else {
+        // Skip unloaded chunks
+        if (!c->second.data)
+          return;
+        // Mark all covered chunks as loaded, making sure not to go over the edge
+        {
+          const auto pos = (c->second.centre - start) / scale;
+          coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
+          const auto max_dist = 1 + chunk_pix_size/2;
+          uint64_t x_min = std::max<int64_t>(0, pos[0]-max_dist);
+          uint64_t x_max = std::min<int64_t>(dims_int[0], pos[0]+max_dist + 1);
+          uint64_t y_min = std::max<int64_t>(0, pos[1]-max_dist);
+          uint64_t y_max = std::min<int64_t>(dims_int[1], pos[1]+max_dist + 1);
+
+          for (size_t x = x_min; x < x_max; ++x) {
+            for (size_t y = y_min; y < y_max; ++y) {
+              pixel_loaded.at(x + y * dims_int[0]) = 1;
+            }
+          }
+        }
+        for (auto& point : *c->second.data) {
+          auto pos = (point - start) / scale;
+          coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
+          // Make sure we don't go off the screen
+          if (pixel_coords[0] < 0 || pixel_coords[1] < 0 || pixel_coords[0] >= dims_int[0] || pixel_coords[1] >= dims_int[1])
+            return;
+          pixel_dusty[pixel_coords[0] + pixel_coords[1] * dims_int[0]] = 1;
+        }
       }
     });
+
+
+    std::vector<uint32_t> out(dims_int[0] * dims_int[1], 0x002000);
+    for (size_t i = 0; i < pixel_loaded.size(); ++i) {
+      // Sometimes we may not mark a loaded chunk due to rounding error
+      if (pixel_dusty[i])
+        out[i] = 0x000000;
+      else if (pixel_loaded[i])
+        out[i] = 0xffffff;
+    }
     return out;
   }
 
@@ -396,7 +456,7 @@ int main(int argc, char** argv) {
     auto step_end = std::chrono::system_clock::now();
     auto total_time = std::chrono::duration_cast<std::chrono::duration<double>>(step_end - start_time).count();
     auto step_time = std::chrono::duration_cast<std::chrono::duration<double>>(step_end - step_start).count();
-    std::cout << count << " iters (" << (params.iter_step/n_cleaners) << " avg per worker per step) in " << total_time << "s (step has " << (params.iter_step / (step_time * 1000)) << "kiter/s)" << std::endl;
+    std::cout << count << " iters (" << (params.iter_step) << " per step) in " << total_time << "s (step has " << (params.iter_step / (step_time * 1000)) << "kiter/s)" << std::endl;
 
     g.set_iter_count(count*n_cleaners);
     g.draw_space(s, cleaners.get_cleaners_pos());

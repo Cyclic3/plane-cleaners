@@ -3,8 +3,13 @@
 #include <chrono>
 #include <iostream>
 #include <map>
+#include <optional>
 #include <shared_mutex>
 
+/// The side length of each chunk
+//
+// 6 seems to be near some local maximum on my machine, but this has not been rigorously selected
+static constexpr double chunk_size = 6;
 class space {
 private:
   using chunk_id_t = coord_t<2, int64_t>;
@@ -12,7 +17,7 @@ private:
   using chunk_map = std::map<chunk_id_t, chunk_info>;
   struct chunk_info {
     /// The actual points in the chunk
-    chunk data;
+    std::optional<chunk> data;
     /// Either `active_chunks.end()` or an iterator for the next chunk to the right (+ {1, 0})
     chunk_map::iterator cached_right;
     /// Either `active_chunks.end()` or an iterator for the next chunk up (+ {0, 1})
@@ -21,13 +26,17 @@ private:
     ///
     /// This allows us to easily iterate a L_\infty search for a point, as the bottom right point of an L_\infty circle with 1 greater radius is 1 down and 1 to the right
     chunk_map::iterator cached_next;
+    /// The centre of the chunk
+    coord_t<2> centre;
+
+    chunk& get_data(chunk_generator& gen) {
+      if (!data)
+        data.emplace(gen.create_chunk(centre));
+      return *data;
+    }
   };
 
 private:
-  /// The side length of each chunk
-  //
-  // 6 seems to be near some local maximum on my machine, but this has not been rigorously selected
-  static constexpr double chunk_size = 6;
   /// The set of chunks that currently reside in memory
   //
   // TODO: implement swapping/memory efficient storage for LRU points
@@ -56,7 +65,7 @@ private:
     auto up = active_chunks.find(chunk_id + chunk_id_t{0, 1});
     auto next = active_chunks.find(chunk_id - chunk_id_t{1, 1});
 
-    return active_chunks.emplace_hint(iter, chunk_id, chunk_info{chunk_gen.create_chunk(get_chunk_centre(chunk_id)), right, up, next});
+    return active_chunks.emplace_hint(iter, chunk_id, chunk_info{std::nullopt, right, up, next, get_chunk_centre(chunk_id)});
   }
   chunk_map::iterator load_right(chunk_map::iterator const& chunk) {
     if (chunk->second.cached_right != active_chunks.end())
@@ -99,14 +108,17 @@ public:
 
     int64_t l_inf_radius = 1;
     // DRY function for checking the points in a chunk
-    auto handle_one = [&best, &target, &l_inf_radius_upper_bound, &l_inf_centre_dist](chunk_map::iterator const& chunk_iter) {
-      if (chunk_iter->second.data.empty())
+    //
+    // XXX: assumes that chunk has actually been loaded
+    auto handle_one = [&best, &target, &l_inf_radius_upper_bound, &l_inf_centre_dist, this](chunk_map::iterator const& chunk_iter) {
+      auto& data = chunk_iter->second.get_data(chunk_gen);
+      if (data.empty())
         return;
 
       // Calculating a lower bound for the distance to points in this chunk actually takes more time that it saves
 
       // Check all the points in the chunk
-      if (auto closest_in_chunk = chunk_iter->second.data.find_nearest(target); closest_in_chunk.second < best.distance) {
+      if (auto closest_in_chunk = data.find_nearest(target); closest_in_chunk.second < best.distance) {
         best = {{chunk_iter, closest_in_chunk.first}, closest_in_chunk.second};
         // Checking to see if we're on the last iteration slows us down for some reason
         //
@@ -249,6 +261,7 @@ public:
 
   /// XXX: all functions on this class will now become invalid, except for using it as a start for a search
   void remove(decltype(find_nearest_ret_t::iter) point) {
-    point.first->second.data.remove(point.second);
+    // If we got a reference, it must exist, right???
+    point.first->second.data->remove(point.second);
   }
 };
