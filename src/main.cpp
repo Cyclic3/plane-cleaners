@@ -8,6 +8,7 @@
 #include <mutex>
 #include <thread>
 #include <latch>
+#include <optional>
 
 struct sdl_exception : std::runtime_error {
   sdl_exception() : std::runtime_error{SDL_GetError()} {}
@@ -34,7 +35,6 @@ private:
   std::atomic<uint64_t> iter_count = 0;
 
   std::jthread worker_thread;
-
 
   std::mutex param_mutex;
   struct {
@@ -239,7 +239,7 @@ public:
     return _params;
   }
 
-  void draw_space(space& s, std::vector<coord_t<2>>& cleaners) {
+  void draw_space(space& s, std::vector<coord_t<2>> const& cleaners) {
     auto params = get_params();
 
     // Calculate the window position and dimensions
@@ -290,60 +290,120 @@ public:
   }
 };
 
+class cleaner_manager {
+private:
+  // The maximum value of `current_time` before we reset the clocks, and move back `when_next` for each cleaner;
+  static constexpr double time_bound = 1e9;
+
+private:
+  struct cleaner_time_info {
+    size_t cleaner_idx;
+    double when_next;
+  };
+  static constexpr auto cleaner_time_cmp = [](auto& a, auto& b) { return a.when_next > b.when_next; };
+  struct cleaner_info {
+    coord_t<2> pos = {0, 0};
+    std::optional<space::find_nearest_ret_t::start_t> start;
+  };
+
+private:
+  size_t n_cleaners;
+  std::vector<cleaner_info> cleaners;
+  std::vector<cleaner_time_info> next_cleaner_heap;
+  double current_time;
+
+  // These are opaque, so it does not matter if these change unexpectedly,
+  // as long as it isn't by two threads simultaneously
+  mutable pcg32_fast cleaner_time_rng;
+  mutable std::exponential_distribution<double> cleaner_time_dist;
+
+private:
+  double gen_time() const {
+    return current_time + cleaner_time_dist(cleaner_time_rng);
+  }
+  /// XXX: this mutates the underlying state, and can change the `when_next` on literally every single cleaner, as well as reset current_time to 0
+  size_t get_next_cleaner() {
+    std::pop_heap(next_cleaner_heap.begin(), next_cleaner_heap.end(), cleaner_time_cmp);
+    // Copy the cleaner, because we are going to mutate it
+    cleaner_time_info next_cleaner = next_cleaner_heap.back();
+    // Time travel
+    current_time = next_cleaner.when_next;
+    // If we are too far in the future, rewind all the clocks
+    if (current_time > time_bound) {
+      for (auto& i : next_cleaner_heap)
+        i.when_next -= current_time;
+      current_time = 0;
+    }
+    // Give a new time to the next cleaner, and insert it into the heap
+    next_cleaner_heap.back().when_next = gen_time();
+    std::push_heap(next_cleaner_heap.begin(), next_cleaner_heap.end(), cleaner_time_cmp);
+    // Return the index of the next cleaner
+    return next_cleaner.cleaner_idx;
+  }
+public:
+  void step_one(space& s) {
+    auto& cleaner = cleaners.at(get_next_cleaner());
+
+    auto nearest = cleaner.start ? s.find_nearest(cleaner.pos, *cleaner.start) : s.find_nearest(cleaner.pos);
+
+    cleaner.pos = nearest.get_point();
+    cleaner.start = nearest.get_start();
+    // Remove after read to prevent early invalidation
+    s.remove(nearest.iter);
+  }
+  std::vector<coord_t<2>> get_cleaners_pos() const {
+    std::vector<coord_t<2>> ret;
+    ret.reserve(n_cleaners);
+    for (auto& i: cleaners)
+      ret.push_back(i.pos);
+    return ret;
+  }
+
+public:
+  cleaner_manager(size_t _n_cleaners) : n_cleaners{_n_cleaners}, cleaners(_n_cleaners), current_time{0} {
+    if (n_cleaners <= 0)
+      throw std::invalid_argument{"Asked for zero cleaners?"};
+
+    // Seed the rng used for generating cleaner times
+    std::random_device good_rng;
+    std::uniform_int_distribution<decltype(cleaner_time_rng)::result_type> cleaner_time_rng_seed_dist;
+    cleaner_time_rng.seed(cleaner_time_rng_seed_dist(good_rng));
+
+    // Generate the cleaner times
+    for (size_t cleaner_idx = 0; cleaner_idx < n_cleaners; ++cleaner_idx)
+      next_cleaner_heap.emplace_back(cleaner_time_info{.cleaner_idx = cleaner_idx, .when_next = gen_time()});
+    // Order the cleaners into a heap
+    std::make_heap(next_cleaner_heap.begin(), next_cleaner_heap.end(), cleaner_time_cmp);
+  }
+};
+
 int main(int argc, char** argv) {
   space s;
   graphics g({480, 480});
 
   // Default to 1 cleaner
-  size_t n_cleaners = (argc > 1 ? std::stoull(argv[1]) : 1);
-
-  // Load the cleaners at the origin
-  std::vector<coord_t<2>> cleaners(n_cleaners, {0,0});
-  std::vector<space::find_nearest_ret_t::start_t> cleaner_starts(n_cleaners);
-
-  // Do initial iteration on cleaners to find their start position
-  for (size_t cleaner_no = 0; cleaner_no < n_cleaners; ++cleaner_no) {
-    auto& cleaner = cleaners[cleaner_no];
-    auto& cleaner_start = cleaner_starts[cleaner_no];
-
-    auto nearest = s.find_nearest(cleaner);
-
-    cleaner = nearest.get_point();
-    cleaner_start = nearest.get_start();
-    // Remove after read to prevent early invalidation
-    s.remove(nearest.iter);
-  }
+  size_t n_cleaners = (argc > 1 ? std::stoull(argv[1]) : 2);
+  cleaner_manager cleaners{n_cleaners};
 
   auto start_time = std::chrono::system_clock::now();
   uint64_t count = 0;
   while (g.should_loop()) {
     auto step_start = std::chrono::system_clock::now();
     auto params = g.get_params();
-    for (uint64_t this_count = 0; this_count < params.iter_step; ++this_count, ++count){
-      for (size_t cleaner_no = 0; cleaner_no < n_cleaners; ++cleaner_no) {
-        auto& cleaner = cleaners[cleaner_no];
-        auto& cleaner_start = cleaner_starts[cleaner_no];
-
-        auto nearest = s.find_nearest(cleaner, cleaner_start);
-
-        cleaner = nearest.get_point();
-        cleaner_start = nearest.get_start();
-        // Remove after read to prevent early invalidation
-        s.remove(nearest.iter);
-      }
-    }
+    for (uint64_t this_count = 0; this_count < params.iter_step; ++this_count, ++count)
+      cleaners.step_one(s);
 
     auto step_end = std::chrono::system_clock::now();
     auto total_time = std::chrono::duration_cast<std::chrono::duration<double>>(step_end - start_time).count();
     auto step_time = std::chrono::duration_cast<std::chrono::duration<double>>(step_end - step_start).count();
-    std::cout << count*n_cleaners << " iters (" << params.iter_step << " per worker per step) in " << total_time << "s (step has " << (n_cleaners * params.iter_step / (step_time * 1000)) << "kiter/s)" << std::endl;
+    std::cout << count << " iters (" << (params.iter_step/n_cleaners) << " avg per worker per step) in " << total_time << "s (step has " << (params.iter_step / (step_time * 1000)) << "kiter/s)" << std::endl;
 
     g.set_iter_count(count*n_cleaners);
-    g.draw_space(s, cleaners);
+    g.draw_space(s, cleaners.get_cleaners_pos());
   }
 
   // Dump out all the cleaner final positions
-  for (auto& cleaner: cleaners) {
+  for (auto& cleaner: cleaners.get_cleaners_pos()) {
     std::cout << cleaner << ": " << std::abs(cleaner) << std::endl;
   }
 
