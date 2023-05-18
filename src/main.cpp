@@ -262,8 +262,8 @@ private:
 //          if (pos[0]-max_dist <= 0 dims_int[0] || pos[1]-max_dist >= dims_int[1])
 //            continue;
 
-          for (ssize_t x = x_min; x <= x_max; ++x) {
-            for (ssize_t y = y_min; y <= y_max; ++y) {
+          for (int64_t x = x_min; x <= x_max; ++x) {
+            for (int64_t y = y_min; y <= y_max; ++y) {
               pixel_checked.at(x + y * dims_int[0]) = 1;
             }
           }
