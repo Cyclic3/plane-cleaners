@@ -4,6 +4,7 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <set>
 #include <shared_mutex>
 
 /// The side length of each chunk
@@ -41,6 +42,8 @@ private:
   //
   // TODO: implement swapping/memory efficient storage for LRU points
   chunk_map active_chunks;
+  std::set<chunk_id_t> empty_chunks;
+  std::set<chunk_id_t> active_empty_chunks;
   chunk_generator chunk_gen{chunk_size / 2};
 
 public:
@@ -52,6 +55,7 @@ public:
   constexpr coord_t<2> get_chunk_centre(chunk_id_t chunk) const noexcept {
     return {chunk[0] * chunk_size, chunk[1] * chunk_size};
   }
+  constexpr decltype(empty_chunks) const& get_empty_chunk_ids() const noexcept { return empty_chunks; }
 private:
   chunk_map::iterator load_chunk(chunk_id_t chunk_id, bool force_load = false) {
     // Lower bound makes insert faster, roughly doubling the speed of this function
@@ -66,8 +70,20 @@ private:
     auto next = active_chunks.find(chunk_id - chunk_id_t{1, 1});
 
     auto centre = get_chunk_centre(chunk_id);
+    std::optional<chunk> data;
+    if (empty_chunks.contains(chunk_id)) {
+      active_empty_chunks.emplace(chunk_id);
+      data.emplace();
+    }
+    else if (force_load) {
+      data.emplace(chunk_gen.create_chunk(centre));
+      if (data->empty()) {
+        empty_chunks.emplace(chunk_id);
+        active_empty_chunks.emplace(chunk_id);
+      }
+    }
 
-    return active_chunks.emplace_hint(iter, chunk_id, chunk_info{force_load ? std::optional<chunk>{chunk_gen.create_chunk(centre)} : std::nullopt, right, up, next, centre});
+    return active_chunks.emplace_hint(iter, chunk_id, chunk_info{std::move(data), right, up, next, centre});
   }
   chunk_map::iterator load_right(chunk_map::iterator const& chunk, bool force_load = false) {
     if (chunk->second.cached_right != active_chunks.end()) {
@@ -171,10 +187,10 @@ public:
     return best;
   }
 
+  using examine_arg_t = chunk_map::iterator;
   /// Iterates through the given rectangle, but single threaded
   ///
   /// XXX: assumes `bottom_left` is neither above nor to the right of `top_right`
-  using examine_arg_t = chunk_map::iterator;
   template<typename F>
   void examine_rectangle_st(coord_t<2> bottom_left, coord_t<2> top_right, F func, bool force_load = false) {
     chunk_id_t start_chunk_id = calc_chunk_id(bottom_left);
@@ -273,6 +289,39 @@ public:
   /// XXX: all functions on this class will now become invalid, except for using it as a start for a search
   void remove(decltype(find_nearest_ret_t::iter) point) {
     // If we got a reference, it must exist, right???
+    if (point.first->second.data->n_points() <= 1) {
+      empty_chunks.emplace(point.first->first);
+      active_empty_chunks.emplace(point.first->first);
+    }
+    // Remove after we use its data
     point.first->second.data->remove(point.second);
+  }
+
+  void cleanup_empty() {
+    for (auto& i : active_empty_chunks) {
+      auto iter = active_chunks.find(i);
+      // Check to see if this chunk is somehow already gone
+      if (iter == active_chunks.end())
+        throw std::logic_error{"Inconsistent active empty chunk"};
+      // Clean up all neighbours
+      if (auto prev = active_chunks.find(i + chunk_id_t{1, 1}); prev != active_chunks.end())
+        prev->second.cached_next = active_chunks.end();
+      if (auto left = active_chunks.find(i - chunk_id_t{1, 0}); left != active_chunks.end())
+        left->second.cached_right = active_chunks.end();
+      if (auto down = active_chunks.find(i - chunk_id_t{0, 1}); down != active_chunks.end())
+        down->second.cached_up = active_chunks.end();
+      active_chunks.erase(iter);
+    }
+    active_empty_chunks.clear();
+  }
+
+  void write_chunk_info(std::ostream& out) const {
+    size_t n_nonempty_active = active_chunks.size() - active_empty_chunks.size();
+    size_t n_inactive = empty_chunks.size() - active_empty_chunks.size();
+    size_t pct_saved = (n_inactive * 100) / (n_inactive + active_chunks.size());
+    std::cout << "Chunks: loaded: " << active_chunks.size()
+              << " / empty+loaded: " << active_empty_chunks.size()
+              << " / unloaded: " << n_inactive
+              << " / saved: " << pct_saved << '%';
   }
 };

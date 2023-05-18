@@ -23,9 +23,10 @@ A small region of 4 cleaners, 220233828 iters:
 ![A small region of 4 cleaners, 220233828 iters](pici/4_220233828.png)
 
 ## Caveats
-`plane-cleaners` will use all the resources it can to run the simulation. This means it will gobble more and more RAM,
+`plane-cleaners` will use all the resources it can to run the simulation. This means it will gobble RAM
 and hammer your CPUs as much as it needs to run as fast as possible, which could result in system crashes.
-A system to swap out unused chunks to disk is being worked on, which should help with the memory exhaustion issues.
+
+If your computer is struggling with running it, try pressing `f`, which will stop the program from generating or checking any chunks it doesn't explicitly need to.
 
 ## How does it work?
 Simulating the whole of $\mathbb{R}^2$ is not really a feasible solution. Instead, we use the following property of the $n$-dimensional Poisson process:

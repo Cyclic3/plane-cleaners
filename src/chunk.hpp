@@ -50,7 +50,7 @@ public:
   constexpr auto cend() const noexcept { return points.cend(); }
 
 public:
-  chunk(std::vector<coord_t<2>> points) : points{std::move(points)} {}
+  chunk(std::vector<coord_t<2>> points = {}) : points{std::move(points)} {}
 };
 
 /// A class that generates affine chunks on many threads

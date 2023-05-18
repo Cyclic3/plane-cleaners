@@ -46,6 +46,8 @@ private:
     coord_t<2, int> dims_int;
     /// The number of iterations we do in a single step
     uint64_t iter_step = 1;
+    /// Whether we should force clean chunk optimisation
+    bool force_opt = false;
   } _params;
 
   struct {
@@ -122,41 +124,41 @@ private:
               _params.scale /= tweaks.zoom_power;
             } break;
 
-            case 'o':{
+            case 'o': {
               std::unique_lock lock{param_mutex};
               _params.scale *= tweaks.zoom_power;
             } break;
 
             case 'a':
-            case SDLK_LEFT:
-            {
+            case SDLK_LEFT: {
               std::unique_lock lock{param_mutex};
               _params.centre -= coord_t<2>{tweaks.rel_step * _params.scale, 0};
             } break;
 
             case 'd':
-            case SDLK_RIGHT:
-            {
+            case SDLK_RIGHT: {
               std::unique_lock lock{param_mutex};
               _params.centre += coord_t<2>{tweaks.rel_step * _params.scale, 0};
             } break;
 
             case 'w':
-            case SDLK_UP:
-            {
+            case SDLK_UP: {
               std::unique_lock lock{param_mutex};
               _params.centre -= coord_t<2>{0, tweaks.rel_step * _params.scale};
             } break;
 
             case 's':
-            case SDLK_DOWN:
-            {
+            case SDLK_DOWN: {
               std::unique_lock lock{param_mutex};
               _params.centre += coord_t<2>{0, tweaks.rel_step * _params.scale};
             } break;
 
-            case 'p':
-            {
+            case 'f': {
+              std::unique_lock lock{param_mutex};
+              _params.force_opt = !_params.force_opt;
+            } break;
+
+            case 'p': {
               std::unique_lock lock{param_mutex};
               std::unique_lock renderer_lock{renderer_mutex};
               std::vector<uint32_t> out(_params.dims_int[0] * _params.dims_int[1]);
@@ -171,20 +173,17 @@ private:
             } break;
 
             case '+':
-            case '=':
-            {
+            case '=': {
               std::unique_lock lock{param_mutex};
               _params.iter_step = std::max(_params.iter_step, _params.iter_step*2);
             } break;
 
-            case '-':
-            {
+            case '-': {
               std::unique_lock lock{param_mutex};
               _params.iter_step = std::max<uint64_t>(1, _params.iter_step/2);
             } break;
 
-            case '0':
-            {
+            case '0': {
               std::unique_lock lock{param_mutex};
               _params.iter_step = 1;
             } break;
@@ -214,42 +213,65 @@ private:
   /// Walks through the given rectangle, generating black/white pixels for each point
   ///
   // TODO: fix this being pretty slow
-  std::vector<uint32_t> get_pixels(space& s, coord_t<2> start, coord_t<2> finish, double scale, coord_t<2, int> const& dims_int) {
+  std::vector<uint32_t> get_pixels(space& s, coord_t<2> start, coord_t<2> finish, double scale, coord_t<2, int> const& dims_int, bool force_opt) {
     auto chunk_pix_size = std::max<uint64_t>(chunk_size / scale, 1);
     // Check if the chunks are small enough that we don't have to worry about quantisation
-    bool do_opt = chunk_size / scale < 0.5;
+    bool small_chunks = chunk_size / scale < 0.5;
+    bool quite_small_chunks = scale > 2;
+    bool do_opt = small_chunks || force_opt || quite_small_chunks;
 
     // can't use std::vector<bool> because of the bit funny
-    std::vector<uint8_t> pixel_loaded(dims_int[0] * dims_int[1], 0);
+    std::vector<uint8_t> pixel_checked(dims_int[0] * dims_int[1], 0);
     std::vector<uint8_t> pixel_dusty(dims_int[0] * dims_int[1], 0);
-    // If we are zoomed at far enough, all unloaded pixels are probably dusty, so no need to make everything look bad
-    if (do_opt) {
-//      std::fill(pixel_loaded.begin(), pixel_loaded.end(), 1);
-      std::fill(pixel_dusty.begin(), pixel_dusty.end(), 0);
-    }
 
     if (do_opt) {
-      std::cout << "OPT" << std::endl;
-      // It turns out that it's not worth the cost of synchonisation for this
-      s.examine_rectangle_st(start, finish, [&start, &pixel_loaded, &pixel_dusty, &scale, &dims_int](space::examine_arg_t const& c) {
-        auto pos = (c->second.centre - start) / scale;
-        coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
+      // If we are zoomed at far enough, all unloaded pixels are probably dusty
+      //
+      // We therefore only look through the chunks we know to be explicitly clear
+      std::fill(pixel_checked.begin(), pixel_checked.end(), 0);
 
-        // Skip OOB chunks
-        if (pixel_coords[0] < 0 || pixel_coords[1] < 0 || pixel_coords[0] >= dims_int[0] || pixel_coords[1] >= dims_int[1])
-          return;
+      if (small_chunks) {
+        for (auto chunk_id : s.get_empty_chunk_ids()) {
+          auto centre = s.get_chunk_centre(chunk_id);
+          auto pos = (centre - start) / scale;
+          coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
 
-        size_t pixel_idx = pixel_coords[0] + pixel_coords[1] * dims_int[0];
-        // At this scale, all unloaded chunks likely have dust in them
-        if (!c->second.data)
-          return;
-        pixel_loaded[pixel_idx] = 1;
-        if (!c->second.data->empty())
-          pixel_dusty[pixel_idx] = 1;
-      }, false);
+          // Skip OOB chunks
+          if (pixel_coords[0] < 0 || pixel_coords[1] < 0 || pixel_coords[0] >= dims_int[0] || pixel_coords[1] >= dims_int[1])
+            continue;
+
+          size_t pixel_idx = pixel_coords[0] + pixel_coords[1] * dims_int[0];
+          pixel_checked[pixel_idx] = 1;
+        }
+      }
+      else {
+        for (auto chunk_id : s.get_empty_chunk_ids()) {
+          auto centre = s.get_chunk_centre(chunk_id);
+          auto pos = (centre - start) / scale;
+          coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
+
+          const auto max_dist = 1 + chunk_pix_size/2;
+          // We need to use clamp here to handle negative values
+          //
+          // Doing this clever thing with alternating bounds means that points off the screen will have empty ranges
+          int64_t x_min = std::clamp<int64_t>(pos[0]-max_dist, 0, dims_int[0]);
+          int64_t x_max = std::clamp<int64_t>(pos[0]+max_dist, -1, dims_int[0] - 1);
+          int64_t y_min = std::clamp<int64_t>(pos[1]-max_dist, 0, dims_int[1]);
+          int64_t y_max = std::clamp<int64_t>(pos[1]+max_dist, -1, dims_int[1] - 1);
+          // Deal with annoying edge case
+//          if (pos[0]-max_dist <= 0 dims_int[0] || pos[1]-max_dist >= dims_int[1])
+//            continue;
+
+          for (ssize_t x = x_min; x <= x_max; ++x) {
+            for (ssize_t y = y_min; y <= y_max; ++y) {
+              pixel_checked.at(x + y * dims_int[0]) = 1;
+            }
+          }
+        }
+      }
     }
     else {
-      s.examine_rectangle(start, finish, [&start, &pixel_loaded, &pixel_dusty, &scale, &dims_int, chunk_pix_size](space::examine_arg_t const& c) {
+      s.examine_rectangle(start, finish, [&start, &pixel_checked, &pixel_dusty, &scale, &dims_int, chunk_pix_size](space::examine_arg_t const& c) {
         if (!c->second.data)
           return;
         // Mark all covered chunks as loaded, making sure not to go over the edge
@@ -257,14 +279,14 @@ private:
           const auto pos = (c->second.centre - start) / scale;
           coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
           const auto max_dist = 1 + chunk_pix_size/2;
-          uint64_t x_min = std::max<int64_t>(0, pos[0]-max_dist);
-          uint64_t x_max = std::min<int64_t>(dims_int[0], pos[0]+max_dist + 1);
-          uint64_t y_min = std::max<int64_t>(0, pos[1]-max_dist);
-          uint64_t y_max = std::min<int64_t>(dims_int[1], pos[1]+max_dist + 1);
+          uint64_t x_min = std::max<uint64_t>(0, pos[0]-max_dist);
+          uint64_t x_max = std::min<uint64_t>(dims_int[0], pos[0]+max_dist + 1);
+          uint64_t y_min = std::max<uint64_t>(0, pos[1]-max_dist);
+          uint64_t y_max = std::min<uint64_t>(dims_int[1], pos[1]+max_dist + 1);
 
           for (size_t x = x_min; x < x_max; ++x) {
             for (size_t y = y_min; y < y_max; ++y) {
-              pixel_loaded.at(x + y * dims_int[0]) = 1;
+              pixel_checked.at(x + y * dims_int[0]) = 1;
             }
           }
         }
@@ -276,16 +298,16 @@ private:
             return;
           pixel_dusty[pixel_coords[0] + pixel_coords[1] * dims_int[0]] = 1;
         }
-      }, scale < 2);
+      }, true);
     }
 
 
-    std::vector<uint32_t> out(dims_int[0] * dims_int[1], 0x002000);
-    for (size_t i = 0; i < pixel_loaded.size(); ++i) {
+    std::vector<uint32_t> out(dims_int[0] * dims_int[1], do_opt ? 0x200000 : 0x002000);
+    for (size_t i = 0; i < pixel_checked.size(); ++i) {
       // Sometimes we may not mark a loaded chunk due to rounding error
       if (pixel_dusty[i])
         out[i] = 0x000000;
-      else if (pixel_loaded[i])
+      else if (pixel_checked[i])
         out[i] = 0xffffff;
     }
     return out;
@@ -311,7 +333,7 @@ public:
     coord_t<2> finish = params.centre + ((dims / 2) * params.scale);
 
     // Load the pixels
-    auto pix = get_pixels(s, start, finish, params.scale, params.dims_int);
+    auto pix = get_pixels(s, start, finish, params.scale, params.dims_int, params.force_opt);
 
     std::unique_lock renderer_lock{renderer_mutex};
 
@@ -421,6 +443,10 @@ public:
       ret.push_back(i.pos);
     return ret;
   }
+  void clear_starts() {
+    for (auto& i: cleaners)
+      i.start.reset();
+  }
 
 public:
   cleaner_manager(size_t _n_cleaners) : n_cleaners{_n_cleaners}, cleaners(_n_cleaners), current_time{0} {
@@ -460,9 +486,16 @@ int main(int argc, char** argv) {
     auto total_time = std::chrono::duration_cast<std::chrono::duration<double>>(step_end - start_time).count();
     auto step_time = std::chrono::duration_cast<std::chrono::duration<double>>(step_end - step_start).count();
     std::cout << count << " iters (" << (params.iter_step) << " per step) in " << total_time << "s (step has " << (params.iter_step / (step_time * 1000)) << "kiter/s)" << std::endl;
+    s.write_chunk_info(std::cout);
+    std::cout << std::endl;
 
     g.set_iter_count(count*n_cleaners);
     g.draw_space(s, cleaners.get_cleaners_pos());
+
+
+    // Yeah this dangling iterator bug took me a *while* to find
+    cleaners.clear_starts();
+    s.cleanup_empty();
   }
 
   // Dump out all the cleaner final positions
