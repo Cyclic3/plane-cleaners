@@ -169,9 +169,10 @@ public:
 
 public:
   chunk_generator(double radius, size_t backlog_size_ = 256, int n_workers = -1) : backlog_size{backlog_size_} {
-    // Create the fallback generator, that we will copy for each worker
-    std::poisson_distribution<size_t> n_points_dist{radius*radius};
+    // We have a total area of (2*radius)*(2*radius) = 4*radius*radius
+    std::poisson_distribution<size_t> n_points_dist{radius*radius * 4};
     std::uniform_real_distribution<double> pos_dist{-radius, radius};
+    // Create the fallback generator, that we will copy for each worker
     fallback_generator = {n_points_dist, pos_dist};
 
     // If the user hasn't limited our worker count, assume they want us to completely lock up their cpu

@@ -217,7 +217,7 @@ private:
     auto chunk_pix_size = std::max<uint64_t>(chunk_size / scale, 1);
     // Check if the chunks are small enough that we don't have to worry about quantisation
     bool small_chunks = chunk_size / scale < 0.5;
-    bool quite_small_chunks = scale > 4;
+    bool quite_small_chunks = scale > 2;
     bool do_opt = small_chunks || force_opt || quite_small_chunks;
 
     // can't use std::vector<bool> because of the bit funny

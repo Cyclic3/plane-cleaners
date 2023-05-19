@@ -10,7 +10,7 @@
 /// The side length of each chunk
 //
 // This seems to be near some local maximum on my machine, but this has not been rigorously selected
-static constexpr double chunk_size = 16;
+static constexpr double chunk_size = 8;
 class space {
 private:
   using chunk_id_t = coord_t<2, int64_t>;
