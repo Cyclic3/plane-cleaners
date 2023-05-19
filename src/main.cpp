@@ -466,7 +466,7 @@ int main(int argc, char** argv) {
     s.write_chunk_info(std::cout);
     std::cout << std::endl;
 
-    g.set_iter_count(count*n_cleaners);
+    g.set_iter_count(count);
     g.draw_space(s, cleaners.get_cleaners_pos());
 
 
