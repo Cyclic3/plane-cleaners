@@ -217,18 +217,18 @@ private:
     auto chunk_pix_size = std::max<uint64_t>(chunk_size / scale, 1);
     // Check if the chunks are small enough that we don't have to worry about quantisation
     bool small_chunks = chunk_size / scale < 0.5;
-    bool quite_small_chunks = scale > 2;
+    bool quite_small_chunks = scale > 4;
     bool do_opt = small_chunks || force_opt || quite_small_chunks;
 
     // can't use std::vector<bool> because of the bit funny
-    std::vector<uint8_t> pixel_checked(dims_int[0] * dims_int[1], 0);
+//    std::vector<uint8_t> pixel_checked(dims_int[0] * dims_int[1], 0);
     std::vector<uint8_t> pixel_dusty(dims_int[0] * dims_int[1], 0);
 
     if (do_opt) {
       // If we are zoomed at far enough, all unloaded pixels are probably dusty
       //
       // We therefore only look through the chunks we know to be explicitly clear
-      std::fill(pixel_checked.begin(), pixel_checked.end(), 0);
+      std::fill(pixel_dusty.begin(), pixel_dusty.end(), 1);
 
       if (small_chunks) {
         for (auto chunk_id : s.get_empty_chunk_ids()) {
@@ -241,7 +241,7 @@ private:
             continue;
 
           size_t pixel_idx = pixel_coords[0] + pixel_coords[1] * dims_int[0];
-          pixel_checked[pixel_idx] = 1;
+          pixel_dusty[pixel_idx] = 0;
         }
       }
       else {
@@ -258,57 +258,34 @@ private:
           int64_t x_max = std::clamp<int64_t>(pos[0]+max_dist, -1, dims_int[0] - 1);
           int64_t y_min = std::clamp<int64_t>(pos[1]-max_dist, 0, dims_int[1]);
           int64_t y_max = std::clamp<int64_t>(pos[1]+max_dist, -1, dims_int[1] - 1);
-          // Deal with annoying edge case
-//          if (pos[0]-max_dist <= 0 dims_int[0] || pos[1]-max_dist >= dims_int[1])
-//            continue;
 
           for (int64_t x = x_min; x <= x_max; ++x) {
             for (int64_t y = y_min; y <= y_max; ++y) {
-              pixel_checked.at(x + y * dims_int[0]) = 1;
+              pixel_dusty.at(x + y * dims_int[0]) = 0;
             }
           }
         }
       }
     }
     else {
-      s.examine_rectangle(start, finish, [&start, &pixel_checked, &pixel_dusty, &scale, &dims_int, chunk_pix_size](space::examine_arg_t const& c) {
-        if (!c->second.data)
-          return;
-        // Mark all covered chunks as loaded, making sure not to go over the edge
-        {
-          const auto pos = (c->second.centre - start) / scale;
-          coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
-          const auto max_dist = 1 + chunk_pix_size/2;
-          uint64_t x_min = std::max<uint64_t>(0, pos[0]-max_dist);
-          uint64_t x_max = std::min<uint64_t>(dims_int[0], pos[0]+max_dist + 1);
-          uint64_t y_min = std::max<uint64_t>(0, pos[1]-max_dist);
-          uint64_t y_max = std::min<uint64_t>(dims_int[1], pos[1]+max_dist + 1);
-
-          for (size_t x = x_min; x < x_max; ++x) {
-            for (size_t y = y_min; y < y_max; ++y) {
-              pixel_checked.at(x + y * dims_int[0]) = 1;
-            }
-          }
-        }
-        for (auto& point : *c->second.data) {
+      s.examine_rectangle(start, finish, [&start, &pixel_dusty, &scale, &dims_int](space::examine_arg_t const& c) {
+        for (auto& point : c->second.data) {
           auto pos = (point - start) / scale;
-          coord_t<2, int64_t> pixel_coords{pos[0], pos[1]};
+          coord_t<2, int64_t> pixel_coords{std::round(pos[0]), pos[1]};
           // Make sure we don't go off the screen
           if (pixel_coords[0] < 0 || pixel_coords[1] < 0 || pixel_coords[0] >= dims_int[0] || pixel_coords[1] >= dims_int[1])
-            return;
+            continue;
           pixel_dusty[pixel_coords[0] + pixel_coords[1] * dims_int[0]] = 1;
         }
       }, true);
     }
 
 
-    std::vector<uint32_t> out(dims_int[0] * dims_int[1], do_opt ? 0x200000 : 0x002000);
-    for (size_t i = 0; i < pixel_checked.size(); ++i) {
+    std::vector<uint32_t> out(dims_int[0] * dims_int[1], 0xffffff);
+    for (size_t i = 0; i < pixel_dusty.size(); ++i) {
       // Sometimes we may not mark a loaded chunk due to rounding error
       if (pixel_dusty[i])
-        out[i] = 0x000000;
-      else if (pixel_checked[i])
-        out[i] = 0xffffff;
+        out[i] = do_opt ? 0x002000: 0x000000;
     }
     return out;
   }

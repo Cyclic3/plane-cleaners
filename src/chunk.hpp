@@ -168,9 +168,9 @@ public:
   }
 
 public:
-  chunk_generator(double radius, size_t backlog_size_ = 16, int n_workers = -1) : backlog_size{backlog_size_} {
+  chunk_generator(double radius, size_t backlog_size_ = 256, int n_workers = -1) : backlog_size{backlog_size_} {
     // Create the fallback generator, that we will copy for each worker
-    std::poisson_distribution<size_t> n_points_dist{radius*radius*4};
+    std::poisson_distribution<size_t> n_points_dist{radius*radius};
     std::uniform_real_distribution<double> pos_dist{-radius, radius};
     fallback_generator = {n_points_dist, pos_dist};
 

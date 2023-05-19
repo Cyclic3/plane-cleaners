@@ -9,8 +9,8 @@
 
 /// The side length of each chunk
 //
-// 6 seems to be near some local maximum on my machine, but this has not been rigorously selected
-static constexpr double chunk_size = 10; //6
+// This seems to be near some local maximum on my machine, but this has not been rigorously selected
+static constexpr double chunk_size = 16;
 class space {
 private:
   using chunk_id_t = coord_t<2, int64_t>;
@@ -18,7 +18,8 @@ private:
   using chunk_map = std::map<chunk_id_t, chunk_info>;
   struct chunk_info {
     /// The actual points in the chunk
-    std::optional<chunk> data;
+//    std::optional<chunk> data;
+    chunk data;
     /// Either `active_chunks.end()` or an iterator for the next chunk to the right (+ {1, 0})
     chunk_map::iterator cached_right;
     /// Either `active_chunks.end()` or an iterator for the next chunk up (+ {0, 1})
@@ -30,11 +31,12 @@ private:
     /// The centre of the chunk
     coord_t<2> centre;
 
-    chunk& get_data(chunk_generator& gen) {
-      if (!data)
-        data.emplace(gen.create_chunk(centre));
-      return *data;
-    }
+//    chunk& get_data(chunk_generator& gen) {
+//      return data;
+////      if (!data)
+////        data.emplace(gen.create_chunk(centre));
+////      return *data;
+//    }
   };
 
 private:
@@ -70,41 +72,36 @@ private:
     auto next = active_chunks.find(chunk_id - chunk_id_t{1, 1});
 
     auto centre = get_chunk_centre(chunk_id);
-    std::optional<chunk> data;
+    chunk data;
     if (empty_chunks.contains(chunk_id)) {
       active_empty_chunks.emplace(chunk_id);
-      data.emplace();
     }
-    else if (force_load) {
-      data.emplace(chunk_gen.create_chunk(centre));
-      if (data->empty()) {
-        empty_chunks.emplace(chunk_id);
-        active_empty_chunks.emplace(chunk_id);
-      }
+    else {
+      data = chunk_gen.create_chunk(centre);
     }
 
     return active_chunks.emplace_hint(iter, chunk_id, chunk_info{std::move(data), right, up, next, centre});
   }
   chunk_map::iterator load_right(chunk_map::iterator const& chunk, bool force_load = false) {
     if (chunk->second.cached_right != active_chunks.end()) {
-      if (force_load)
-        chunk->second.cached_right->second.get_data(chunk_gen);
+//      if (force_load)
+//        chunk->second.cached_right->second.get_data(chunk_gen);
       return chunk->second.cached_right;
     }
     return chunk->second.cached_right = load_chunk(chunk->first + chunk_id_t{1, 0}, force_load);
   }
   chunk_map::iterator load_up(chunk_map::iterator const& chunk, bool force_load = false) {
     if (chunk->second.cached_up != active_chunks.end()) {
-      if (force_load)
-        chunk->second.cached_up->second.get_data(chunk_gen);
+//      if (force_load)
+//        chunk->second.cached_up->second.get_data(chunk_gen);
       return chunk->second.cached_up;
     }
     return chunk->second.cached_up = load_chunk(chunk->first + chunk_id_t{0, 1}, force_load);
   }
   chunk_map::iterator load_next(chunk_map::iterator const& chunk, bool force_load = false) {
     if (chunk->second.cached_next != active_chunks.end()){
-      if (force_load)
-        chunk->second.cached_next->second.get_data(chunk_gen);
+//      if (force_load)
+//        chunk->second.cached_next->second.get_data(chunk_gen);
       return chunk->second.cached_next;
     }
     return chunk->second.cached_next = load_chunk(chunk->first - chunk_id_t{1, 1}, force_load);
@@ -138,7 +135,7 @@ public:
     //
     // XXX: assumes that chunk has actually been loaded
     auto handle_one = [&best, &target, &l_inf_radius_upper_bound, &l_inf_centre_dist, this](chunk_map::iterator const& chunk_iter) {
-      auto& data = chunk_iter->second.get_data(chunk_gen);
+      auto& data = chunk_iter->second.data;
       if (data.empty())
         return;
 
@@ -289,12 +286,12 @@ public:
   /// XXX: all functions on this class will now become invalid, except for using it as a start for a search
   void remove(decltype(find_nearest_ret_t::iter) point) {
     // If we got a reference, it must exist, right???
-    if (point.first->second.data->n_points() <= 1) {
+    if (point.first->second.data.n_points() <= 1) {
       empty_chunks.emplace(point.first->first);
       active_empty_chunks.emplace(point.first->first);
     }
     // Remove after we use its data
-    point.first->second.data->remove(point.second);
+    point.first->second.data.remove(point.second);
   }
 
   void cleanup_empty() {
